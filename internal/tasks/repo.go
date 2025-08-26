@@ -10,7 +10,7 @@ var ErrTitleRequired = errors.New("title required")
 
 type Repository interface {
 	Create(title string) (Task, error)
-	List() []Task
+	List() ([]Task, error)
 }
 
 type InMemoryRepo struct {
@@ -44,7 +44,7 @@ func (r *InMemoryRepo) Create(title string) (Task, error) {
 	return t, nil
 }
 
-func (r *InMemoryRepo) List() []Task {
+func (r *InMemoryRepo) List() ([]Task, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -52,5 +52,5 @@ func (r *InMemoryRepo) List() []Task {
 	for _, t := range r.store {
 		out = append(out, t)
 	}
-	return out
+	return out, nil
 }

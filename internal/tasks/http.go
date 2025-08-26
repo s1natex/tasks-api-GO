@@ -51,7 +51,14 @@ func createTask(repo Repository) http.HandlerFunc {
 func listTasks(repo Repository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		tasks := repo.List()
+
+		tasks, err := repo.List()
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(errResponse{Error: "unexpected error"})
+			return
+		}
+
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(tasks)
 	}

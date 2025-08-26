@@ -3,6 +3,7 @@ package tasks
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,15 +11,14 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-func newTestServer() (*chi.Mux, *InMemoryRepo) {
-	repo := NewInMemoryRepo()
+func newTestServer(repo Repository) *chi.Mux {
 	r := chi.NewRouter()
 	RegisterRoutes(r, repo)
-	return r, repo
+	return r
 }
 
 func TestPostTasks_Success(t *testing.T) {
-	r, _ := newTestServer()
+	r := newTestServer(NewInMemoryRepo())
 
 	body := []byte(`{"title":"learn chi"}`)
 	req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
@@ -50,7 +50,7 @@ func TestPostTasks_Success(t *testing.T) {
 }
 
 func TestPostTasks_TitleRequired(t *testing.T) {
-	r, _ := newTestServer()
+	r := newTestServer(NewInMemoryRepo())
 
 	body := []byte(`{"title":""}`)
 	req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
@@ -73,9 +73,9 @@ func TestPostTasks_TitleRequired(t *testing.T) {
 }
 
 func TestPostTasks_InvalidJSON(t *testing.T) {
-	r, _ := newTestServer()
+	r := newTestServer(NewInMemoryRepo())
 
-	body := []byte(`{"title":`) // truncated/invalid JSON
+	body := []byte(`{"title":`)
 	req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -96,7 +96,7 @@ func TestPostTasks_InvalidJSON(t *testing.T) {
 }
 
 func TestGetTasks_HappyPath(t *testing.T) {
-	r, repo := newTestServer()
+	repo := NewInMemoryRepo()
 
 	seed, err := repo.Create("seeded task")
 	if err != nil {
@@ -106,6 +106,7 @@ func TestGetTasks_HappyPath(t *testing.T) {
 		t.Fatalf("expected seeded task to have an ID")
 	}
 
+	r := newTestServer(repo)
 	req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
@@ -123,5 +124,30 @@ func TestGetTasks_HappyPath(t *testing.T) {
 	}
 	if list[0].Title != "seeded task" {
 		t.Errorf("expected first task title 'seeded task', got %q", list[0].Title)
+	}
+}
+
+type fakeRepoListError struct{}
+
+func (f fakeRepoListError) Create(title string) (Task, error) { return Task{}, nil }
+func (f fakeRepoListError) List() ([]Task, error)             { return nil, errors.New("boom") }
+
+func TestGetTasks_RepoError(t *testing.T) {
+	r := newTestServer(fakeRepoListError{})
+
+	req := httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var errResp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to parse error JSON: %v", err)
+	}
+	if errResp["error"] != "unexpected error" {
+		t.Errorf("expected error 'unexpected error', got %q", errResp["error"])
 	}
 }
