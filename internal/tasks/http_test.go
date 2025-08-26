@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -49,26 +50,71 @@ func TestPostTasks_Success(t *testing.T) {
 	}
 }
 
-func TestPostTasks_TitleRequired(t *testing.T) {
+func TestPostTasks_TitleRequired_ValidationError(t *testing.T) {
 	r := newTestServer(NewInMemoryRepo())
 
-	body := []byte(`{"title":""}`)
+	body := []byte(`{"title":"   "}`)
 	req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected status 400, got %d, body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected status 422, got %d, body=%s", rec.Code, rec.Body.String())
 	}
 
-	var errResp map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+	var resp errResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse error JSON: %v", err)
 	}
-	if errResp["error"] != "title required" {
-		t.Errorf("expected error 'title required', got %q", errResp["error"])
+	if resp.Error != "validation_error" {
+		t.Fatalf("expected error 'validation_error', got %q", resp.Error)
+	}
+	if len(resp.Details) == 0 {
+		t.Fatalf("expected at least 1 field error")
+	}
+	found := false
+	for _, d := range resp.Details {
+		if d.Field == "title" && strings.Contains(d.Message, "required") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected title 'required' validation error, details=%v", resp.Details)
+	}
+}
+
+func TestPostTasks_TitleTooLong_ValidationError(t *testing.T) {
+	r := newTestServer(NewInMemoryRepo())
+
+	long := strings.Repeat("x", 201) // > 200
+	body := []byte(`{"title":"` + long + `"}`)
+	req := httptest.NewRequest(http.MethodPost, "/tasks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected status 422, got %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp errResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse error JSON: %v", err)
+	}
+	if resp.Error != "validation_error" {
+		t.Fatalf("expected error 'validation_error', got %q", resp.Error)
+	}
+	found := false
+	for _, d := range resp.Details {
+		if d.Field == "title" && strings.Contains(d.Message, "at most 200") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected title 'max length' validation error, details=%v", resp.Details)
 	}
 }
 
@@ -86,12 +132,12 @@ func TestPostTasks_InvalidJSON(t *testing.T) {
 		t.Fatalf("expected status 400, got %d, body=%s", rec.Code, rec.Body.String())
 	}
 
-	var errResp map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+	var resp errResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse error JSON: %v", err)
 	}
-	if errResp["error"] != "invalid JSON" {
-		t.Errorf("expected error 'invalid JSON', got %q", errResp["error"])
+	if resp.Error != "invalid_json" {
+		t.Errorf("expected error 'invalid_json', got %q", resp.Error)
 	}
 }
 
@@ -143,11 +189,11 @@ func TestGetTasks_RepoError(t *testing.T) {
 		t.Fatalf("expected status 500, got %d, body=%s", rec.Code, rec.Body.String())
 	}
 
-	var errResp map[string]string
-	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+	var resp errResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to parse error JSON: %v", err)
 	}
-	if errResp["error"] != "unexpected error" {
-		t.Errorf("expected error 'unexpected error', got %q", errResp["error"])
+	if resp.Error != "unexpected_error" {
+		t.Errorf("expected error 'unexpected_error', got %q", resp.Error)
 	}
 }
