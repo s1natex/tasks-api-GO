@@ -52,6 +52,5 @@ func (r *InMemoryRepo) List() []Task {
 	for _, t := range r.store {
 		out = append(out, t)
 	}
-	// order doesn’t matter for now; we’ll sort later if needed
 	return out
 }
