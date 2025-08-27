@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -17,21 +20,62 @@ import (
 )
 
 // main is the entry point of the application
+// It sets up logging, the router with middleware, and starts the HTTP server
+// It also handles graceful shutdown on OS signals
 func main() {
 	logger := newLoggerFromEnv()
 	slog.SetDefault(logger)
 
 	repo := tasks.NewInMemoryRepo()
-	r := newRouter(repo, logger)
+	app := newRouter(repo, logger)
+	health := healthRouter()
 
-	logger.Info("server_listen", slog.String("addr", ":8080"))
-	if err := http.ListenAndServe(":8080", r); err != nil {
-		logger.Error("server_error", slog.String("error", err.Error()))
-		os.Exit(1)
+	appSrv := &http.Server{
+		Addr:              ":8080",
+		Handler:           app,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
+	healthSrv := &http.Server{
+		Addr:              ":8081",
+		Handler:           health,
+		ReadHeaderTimeout: 2 * time.Second,
+	}
+
+	go func() {
+		logger.Info("server_listen", slog.String("addr", appSrv.Addr))
+		if err := appSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("server_error", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+	}()
+	go func() {
+		logger.Info("health_listen", slog.String("addr", healthSrv.Addr))
+		if err := healthSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("health_error", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+	}()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	<-ctx.Done()
+	stop()
+
+	logger.Info("shutdown_begin")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := appSrv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("shutdown_app_error", slog.String("error", err.Error()))
+	}
+
+	if err := healthSrv.Shutdown(context.Background()); err != nil {
+		logger.Error("shutdown_health_error", slog.String("error", err.Error()))
+	}
+
+	logger.Info("shutdown_complete")
 }
 
-// newRouter sets up the HTTP router with middleware and routes
+// newRouter creates a chi.Mux with all application routes and middleware
 func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -48,11 +92,11 @@ func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
 	}))
 	r.Use(middleware.RequestLogger(logger))
 	r.Use(middleware.MetricsMiddleware)
-	// Prometheus metrics endpoint
+
 	r.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		middleware.MetricsHandler().ServeHTTP(w, r)
 	})
-	// Simple health check endpoint
+
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -60,7 +104,17 @@ func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
 	})
 
 	tasks.RegisterRoutes(r, repo)
+	return r
+}
 
+// healthRouter returns a simple router with just the /health endpoint
+func healthRouter() *chi.Mux {
+	r := chi.NewRouter()
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
 	return r
 }
 
@@ -78,9 +132,6 @@ func newLoggerFromEnv() *slog.Logger {
 	default:
 		l = slog.LevelInfo
 	}
-
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: l,
-	})
+	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l})
 	return slog.New(handler)
 }
