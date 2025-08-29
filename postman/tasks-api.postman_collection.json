@@ -1,0 +1,84 @@
+{
+  "info": {
+    "name": "tasks-api-GO",
+    "_postman_id": "0c6b1d1c-5b3a-47d7-9b8e-000000000001",
+    "description": "Sample requests for tasks-api-GO",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "healthUrl", "value": "http://localhost:8081" }
+  ],
+  "item": [
+    {
+      "name": "Health (app :8080)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": "{{baseUrl}}/health"
+      }
+    },
+    {
+      "name": "Create Task (POST /tasks)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"title\": \"learn chi (postman)\"\n}"
+        },
+        "url": "{{baseUrl}}/tasks"
+      }
+    },
+    {
+      "name": "Create Task (422 validation)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Accept", "value": "application/json" }
+        ],
+        "body": { "mode": "raw", "raw": "{ \"title\": \"\" }" },
+        "url": "{{baseUrl}}/tasks"
+      }
+    },
+    {
+      "name": "List Tasks (GET /tasks)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": "{{baseUrl}}/tasks"
+      }
+    },
+    {
+      "name": "Metrics (GET /metrics)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "text/plain" }],
+        "url": "{{baseUrl}}/metrics"
+      }
+    },
+    {
+      "name": "CORS Preflight (OPTIONS /tasks)",
+      "request": {
+        "method": "OPTIONS",
+        "header": [
+          { "key": "Origin", "value": "https://example.com" },
+          { "key": "Access-Control-Request-Method", "value": "POST" }
+        ],
+        "url": "{{baseUrl}}/tasks"
+      }
+    },
+    {
+      "name": "Health (drain :8081)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Accept", "value": "application/json" }],
+        "url": "{{healthUrl}}/health"
+      }
+    }
+  ]
+}
