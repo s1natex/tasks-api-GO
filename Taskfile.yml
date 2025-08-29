@@ -1,0 +1,50 @@
+version: "3"
+
+vars:
+  APP: tasks-api
+  BIN_DIR: bin
+  BIN: "{{.BIN_DIR}}/{{.APP}}"
+  IMAGE: "tasks-api-go:dev"
+  CONTAINER: "tasks-api"
+
+tasks:
+  run:
+    cmds:
+      - go run .
+    silent: false
+
+  test:
+    cmds:
+      - go test ./... -v
+
+  build:
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - go build -trimpath -ldflags "-s -w" -o {{.BIN}} .
+
+  clean:
+    cmds:
+      - rm -rf {{.BIN_DIR}}
+
+  docker-build:
+    cmds:
+      - docker build -t {{.IMAGE}} .
+
+  docker-run:
+    deps: [docker-stop]
+    cmds:
+      - docker run --rm -p 8080:8080 -p 8081:8081 --name {{.CONTAINER}} {{.IMAGE}}
+
+  docker-stop:
+    cmds:
+      - |
+        docker rm -f {{.CONTAINER}} >/dev/null 2>&1 || true
+
+  lint:
+    cmds:
+      - |
+        if command -v golangci-lint >/dev/null 2>&1; then
+          golangci-lint run
+        else
+          echo "golangci-lint not installed; skipping lint"
+        fi
