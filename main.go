@@ -19,15 +19,28 @@ import (
 	"github.com/s1natex/tasks-api-GO/internal/tasks"
 )
 
-// main is the entry point of the application
-// It sets up logging, the router with middleware, and starts the HTTP server
-// It also handles graceful shutdown on OS signals
 func main() {
 	logger := newLoggerFromEnv()
 	slog.SetDefault(logger)
 
-	repo := tasks.NewInMemoryRepo()
-	app := newRouter(repo, logger)
+	dbPath := envDefault("DB_PATH", "data/tasks.db")
+	dsn, err := tasks.SQLiteFileDSN(dbPath)
+	if err != nil {
+		logger.Error("dsn_error", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	sqliteRepo, err := tasks.NewSQLiteRepo(dsn)
+	if err != nil {
+		logger.Error("sqlite_open_error", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer sqliteRepo.Close()
+	if err := sqliteRepo.ApplyMigrations(context.Background()); err != nil {
+		logger.Error("sqlite_migrate_error", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+
+	app := newRouter(sqliteRepo, logger)
 	health := healthRouter()
 
 	appSrv := &http.Server{
@@ -64,18 +77,12 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := appSrv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("shutdown_app_error", slog.String("error", err.Error()))
-	}
-
-	if err := healthSrv.Shutdown(context.Background()); err != nil {
-		logger.Error("shutdown_health_error", slog.String("error", err.Error()))
-	}
+	_ = appSrv.Shutdown(shutdownCtx)
+	_ = healthSrv.Shutdown(context.Background())
 
 	logger.Info("shutdown_complete")
 }
 
-// newRouter creates a chi.Mux with all application routes and middleware
 func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -107,7 +114,6 @@ func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
 	return r
 }
 
-// healthRouter returns a simple router with just the /health endpoint
 func healthRouter() *chi.Mux {
 	r := chi.NewRouter()
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +124,6 @@ func healthRouter() *chi.Mux {
 	return r
 }
 
-// newLoggerFromEnv creates a slog.Logger with level from LOG_LEVEL env var (debug, info, warn, error)
 func newLoggerFromEnv() *slog.Logger {
 	level := strings.ToLower(strings.TrimSpace(os.Getenv("LOG_LEVEL")))
 	var l slog.Level
@@ -134,4 +139,11 @@ func newLoggerFromEnv() *slog.Logger {
 	}
 	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: l})
 	return slog.New(handler)
+}
+
+func envDefault(k, v string) string {
+	if s := strings.TrimSpace(os.Getenv(k)); s != "" {
+		return s
+	}
+	return v
 }
