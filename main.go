@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,12 @@ import (
 	"github.com/s1natex/tasks-api-GO/internal/middleware"
 	"github.com/s1natex/tasks-api-GO/internal/tasks"
 )
+
+//go:embed openapi/openapi.json
+var openapiSpec []byte
+
+//go:embed openapi/swagger.html
+var swaggerHTML string
 
 func main() {
 	logger := newLoggerFromEnv()
@@ -108,6 +115,18 @@ func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	r.Get("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(openapiSpec)
+	})
+
+	r.Get("/docs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(swaggerHTML))
 	})
 
 	tasks.RegisterRoutes(r, repo)
