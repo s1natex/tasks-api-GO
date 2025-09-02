@@ -27,6 +27,8 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdkresource "go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
+	"strconv"
 )
 
 //go:embed openapi/openapi.json
@@ -34,6 +36,16 @@ var openapiSpec []byte
 
 //go:embed openapi/swagger.html
 var swaggerHTML string
+
+func healthRouter() *chi.Mux {
+	r := chi.NewRouter()
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	return r
+}
 
 func main() {
 	logger := newLoggerFromEnv()
@@ -107,11 +119,27 @@ func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
-		ExposedHeaders:   []string{"Link", "X-Request-ID"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-API-Key"},
+		ExposedHeaders:   []string{"Link", "X-Request-ID", "Trace-Id"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
+
+	authCfg := middleware.AuthConfig{
+		Mode:        AuthModeFromEnv(),
+		APIKey:      strings.TrimSpace(os.Getenv("API_KEY")),
+		BearerToken: strings.TrimSpace(os.Getenv("BEARER_TOKEN")),
+		SkipPaths:   []string{"/health", "/openapi.json", "/docs", "/metrics"},
+	}
+	r.Use(middleware.AuthMiddleware(authCfg))
+
+	rps := floatFromEnv("RATE_LIMIT_RPS", 0)
+	burst := intFromEnv("RATE_LIMIT_BURST", 0)
+	if rps > 0 && burst == 0 {
+		burst = int(rps * 2)
+	}
+	r.Use(middleware.RateLimitMiddleware(middleware.NewLimiter(rps, burst)))
+
 	r.Use(middleware.TracingMiddleware)
 	r.Use(middleware.RequestLogger(logger))
 	r.Use(middleware.MetricsMiddleware)
@@ -139,16 +167,6 @@ func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
 	})
 
 	tasks.RegisterRoutes(r, repo)
-	return r
-}
-
-func healthRouter() *chi.Mux {
-	r := chi.NewRouter()
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-	})
 	return r
 }
 
@@ -210,4 +228,33 @@ func initTracer() (func(context.Context) error, error) {
 	otel.SetTracerProvider(tp)
 
 	return tp.Shutdown, nil
+}
+
+func AuthModeFromEnv() middleware.AuthMode {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("AUTH_MODE"))) {
+	case "apikey":
+		return middleware.AuthAPIKey
+	case "bearer":
+		return middleware.AuthBearer
+	default:
+		return middleware.AuthNone
+	}
+}
+
+func floatFromEnv(k string, def float64) float64 {
+	if s := strings.TrimSpace(os.Getenv(k)); s != "" {
+		if v, err := strconv.ParseFloat(s, 64); err == nil {
+			return v
+		}
+	}
+	return def
+}
+
+func intFromEnv(k string, def int) int {
+	if s := strings.TrimSpace(os.Getenv(k)); s != "" {
+		if v, err := strconv.Atoi(s); err == nil {
+			return v
+		}
+	}
+	return def
 }
