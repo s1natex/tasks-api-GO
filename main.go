@@ -18,6 +18,15 @@ import (
 
 	"github.com/s1natex/tasks-api-GO/internal/middleware"
 	"github.com/s1natex/tasks-api-GO/internal/tasks"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/propagation"
+	sdkresource "go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 //go:embed openapi/openapi.json
@@ -29,6 +38,13 @@ var swaggerHTML string
 func main() {
 	logger := newLoggerFromEnv()
 	slog.SetDefault(logger)
+
+	shutdown, err := initTracer()
+	if err != nil {
+		logger.Error("tracing_init_error", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer func() { _ = shutdown(context.Background()) }()
 
 	dbPath := envDefault("DB_PATH", "data/tasks.db")
 	dsn, err := tasks.SQLiteFileDSN(dbPath)
@@ -50,16 +66,8 @@ func main() {
 	app := newRouter(sqliteRepo, logger)
 	health := healthRouter()
 
-	appSrv := &http.Server{
-		Addr:              ":8080",
-		Handler:           app,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	healthSrv := &http.Server{
-		Addr:              ":8081",
-		Handler:           health,
-		ReadHeaderTimeout: 2 * time.Second,
-	}
+	appSrv := &http.Server{Addr: ":8080", Handler: app, ReadHeaderTimeout: 5 * time.Second}
+	healthSrv := &http.Server{Addr: ":8081", Handler: health, ReadHeaderTimeout: 2 * time.Second}
 
 	go func() {
 		logger.Info("server_listen", slog.String("addr", appSrv.Addr))
@@ -104,6 +112,7 @@ func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
+	r.Use(middleware.TracingMiddleware)
 	r.Use(middleware.RequestLogger(logger))
 	r.Use(middleware.MetricsMiddleware)
 
@@ -165,4 +174,40 @@ func envDefault(k, v string) string {
 		return s
 	}
 	return v
+}
+
+func initTracer() (func(context.Context) error, error) {
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	res, _ := sdkresource.Merge(
+		sdkresource.Default(),
+		sdkresource.NewWithAttributes(
+			"",
+			attribute.String("service.name", "tasks-api-GO"),
+		),
+	)
+
+	var exp sdktrace.SpanExporter
+	if ep := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")); ep != "" {
+		client := otlptracehttp.NewClient(otlptracehttp.WithEndpoint(ep), otlptracehttp.WithInsecure())
+		otlpExp, err := otlptrace.New(context.Background(), client)
+		if err != nil {
+			return nil, err
+		}
+		exp = otlpExp
+	} else {
+		stdExp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+		if err != nil {
+			return nil, err
+		}
+		exp = stdExp
+	}
+
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exp),
+		sdktrace.WithResource(res),
+	)
+	otel.SetTracerProvider(tp)
+
+	return tp.Shutdown, nil
 }
