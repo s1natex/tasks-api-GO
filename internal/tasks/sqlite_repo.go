@@ -71,7 +71,7 @@ func (r *SQLiteRepo) List() ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []Task
 	for rows.Next() {

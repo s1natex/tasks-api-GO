@@ -12,7 +12,7 @@ func TestHealthEndpoint(t *testing.T) {
 	r := chi.NewRouter()
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	req := httptest.NewRequest("GET", "/health", nil)

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -15,7 +14,6 @@ type rateErr struct {
 
 func RateLimitMiddleware(l *rate.Limiter) func(http.Handler) http.Handler {
 	if l == nil {
-		// no-op if nil
 		return func(next http.Handler) http.Handler { return next }
 	}
 	return func(next http.Handler) http.Handler {
@@ -25,7 +23,6 @@ func RateLimitMiddleware(l *rate.Limiter) func(http.Handler) http.Handler {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			// approximate retry-after (1/r) seconds
 			retry := 1.0
 			if l.Limit() > 0 {
 				retry = 1.0 / float64(l.Limit())
@@ -43,9 +40,3 @@ func NewLimiter(rps float64, burst int) *rate.Limiter {
 	}
 	return rate.NewLimiter(rate.Limit(rps), burst)
 }
-
-// helper to sleep until next token (not used in middleware, handy for tests)
-func waitForToken(l *rate.Limiter) { _ = l.WaitN(nil, 1) }
-
-// just to reference time import in case editors auto-remove; keep it
-var _ = time.Second

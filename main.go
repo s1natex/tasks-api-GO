@@ -37,42 +37,34 @@ var openapiSpec []byte
 //go:embed openapi/swagger.html
 var swaggerHTML string
 
-func healthRouter() *chi.Mux {
-	r := chi.NewRouter()
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	return r
-}
-
 func main() {
 	logger := newLoggerFromEnv()
 	slog.SetDefault(logger)
+	if err := run(logger); err != nil {
+		logger.Error("fatal", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+}
 
+func run(logger *slog.Logger) error {
 	shutdown, err := initTracer()
 	if err != nil {
-		logger.Error("tracing_init_error", slog.String("error", err.Error()))
-		os.Exit(1)
+		return err
 	}
 	defer func() { _ = shutdown(context.Background()) }()
 
 	dbPath := envDefault("DB_PATH", "data/tasks.db")
 	dsn, err := tasks.SQLiteFileDSN(dbPath)
 	if err != nil {
-		logger.Error("dsn_error", slog.String("error", err.Error()))
-		os.Exit(1)
+		return err
 	}
 	sqliteRepo, err := tasks.NewSQLiteRepo(dsn)
 	if err != nil {
-		logger.Error("sqlite_open_error", slog.String("error", err.Error()))
-		os.Exit(1)
+		return err
 	}
-	defer sqliteRepo.Close()
+	defer func() { _ = sqliteRepo.Close() }()
 	if err := sqliteRepo.ApplyMigrations(context.Background()); err != nil {
-		logger.Error("sqlite_migrate_error", slog.String("error", err.Error()))
-		os.Exit(1)
+		return err
 	}
 
 	app := newRouter(sqliteRepo, logger)
@@ -81,33 +73,38 @@ func main() {
 	appSrv := &http.Server{Addr: ":8080", Handler: app, ReadHeaderTimeout: 5 * time.Second}
 	healthSrv := &http.Server{Addr: ":8081", Handler: health, ReadHeaderTimeout: 2 * time.Second}
 
+	errCh := make(chan error, 2)
+
 	go func() {
 		logger.Info("server_listen", slog.String("addr", appSrv.Addr))
 		if err := appSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("server_error", slog.String("error", err.Error()))
-			os.Exit(1)
+			errCh <- err
 		}
 	}()
 	go func() {
 		logger.Info("health_listen", slog.String("addr", healthSrv.Addr))
 		if err := healthSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("health_error", slog.String("error", err.Error()))
-			os.Exit(1)
+			errCh <- err
 		}
 	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	<-ctx.Done()
-	stop()
+	defer stop()
+
+	select {
+	case <-ctx.Done():
+		// graceful shutdown below
+	case err := <-errCh:
+		logger.Error("server_error", slog.String("error", err.Error()))
+	}
 
 	logger.Info("shutdown_begin")
-
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	_ = appSrv.Shutdown(shutdownCtx)
 	_ = healthSrv.Shutdown(context.Background())
-
 	logger.Info("shutdown_complete")
+	return nil
 }
 
 func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
@@ -167,6 +164,16 @@ func newRouter(repo tasks.Repository, logger *slog.Logger) *chi.Mux {
 	})
 
 	tasks.RegisterRoutes(r, repo)
+	return r
+}
+
+func healthRouter() *chi.Mux {
+	r := chi.NewRouter()
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
 	return r
 }
 
