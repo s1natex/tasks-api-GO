@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tasks-api-config
+  namespace: tasks-api
+data:
+  LOG_LEVEL: "info"
+  DB_PATH: "/app/data/tasks.db"

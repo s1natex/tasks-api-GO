@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tasks-api
+  namespace: tasks-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tasks-api
+  template:
+    metadata:
+      labels:
+        app: tasks-api
+    spec:
+      containers:
+        - name: app
+          image: s1natex/tasks-api-go:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080 # app
+            - containerPort: 8081 # health
+          env:
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: tasks-api-config
+                  key: LOG_LEVEL
+            - name: DB_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: tasks-api-config
+                  key: DB_PATH
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: tasks-api-data
